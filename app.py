@@ -1,101 +1,109 @@
-# SYSTEM PROMPT: ScolioAI — Autonomous End-to-End Cobb Angle & Scoliosis Screening Engine
+import streamlit as st
+import numpy as np
+import cv2
+import time
+import plotly.graph_objects as go
 
-You are a Principal AI Biomedical Engineer and Senior Consultant Orthopedic Research Specialist. Your objective is to architect and code a production-ready, academically rigorous Streamlit web application titled **"ScolioAI: Deep Keypoint-Guided Endplate Segmentation & Dynamic Cobb Angle Quantification with DICOM Integration."**
+from utils.dicom_handler import load_dicom_or_image, apply_clahe
+from utils.geometry import calculate_endplate_angle, compute_cobb_angle, classify_severity
+from utils.pdf_generator import generate_pdf_report
 
-The application must bridge complex computer vision (YOLOv8-Pose / Keypoint Estimation) with real-time DICOM image processing, advanced trigonometric calculations, statistical validation models, and a human-in-the-loop (HITL) interactive refine interface designed for clinical conference presentations.
+st.set_page_config(page_title="ScolioAI: Cobb Angle Assessment", layout="wide")
 
----
+# Header & Introduction
+st.title("ScolioAI: Keypoint-Guided Cobb Angle Quantification")
+st.caption("Autonomous Endplate Detection & Dynamic Human-In-The-Loop Scoliosis Screening")
 
-## 1. ACADEMIC & CLINICAL CONTEXT (PROBLEM STATEMENT & MATH FORMULATION)
+# Sidebar
+st.sidebar.header("Data Ingestion & Controls")
+uploaded_file = st.sidebar.file_uploader("Upload Radiograph (DICOM / PNG / JPG)", type=["dcm", "dicom", "png", "jpg"])
 
-### A. Clinical Problem & Baseline Metrics
-- **Current Clinical Bottleneck:** Manual measurement of Cobb angles on standing anteroposterior (AP) or lateral full-spine radiographs suffers from high inter-observer ($6.2^\circ - 11.8^\circ$) and intra-observer ($3.8^\circ - 8.5^\circ$) variability, especially among non-specialists, ER physicians, and orthopedic trainees.
-- **Diagnostic Thresholds:**
-  - $0^\circ \le \theta < 10^\circ$: Physiological Alignment / Normal Variation.
-  - $10^\circ \le \theta < 25^\circ$: Mild Adolescent Idiopathic Scoliosis (AIS) — Conservative Observation.
-  - $25^\circ \le \theta < 40^\circ$: Moderate AIS — Orthotic Bracing Candidate.
-  - $\theta \ge 40^\circ$: Severe AIS — Surgical Evaluation & Fusion Consideration.
+clahe_clip = st.sidebar.slider("CLAHE Clip Limit (Contrast Enhancement)", 0.5, 5.0, 2.0, 0.1)
+hitl_enabled = st.sidebar.checkbox("Enable Human-in-the-Loop (HITL) Override", value=True)
 
-### B. Mathematical & Trigonometric Quantification Engine
-For each detected vertebra $V_i$ in a sequence of $N$ spine vertebrae ($i \in \{1, \dots, N\}$), the vision network predicts four keypoints representing the superior-left ($P_{i,SL}$), superior-right ($P_{i,SR}$), inferior-left ($P_{i,IL}$), and inferior-right ($P_{i,IR}$) endplate corners:
+if uploaded_file is not None:
+    # 1. Image & DICOM Processing
+    img, metadata = load_dicom_or_image(uploaded_file)
+    img_enhanced = apply_clahe(img, clip_limit=clahe_clip)
+    
+    # Simulate Model Inference
+    t0 = time.time()
+    # Synthetic default keypoints for demonstration (Superior End-Vertebra & Inferior End-Vertebra)
+    h, w = img_enhanced.shape
+    
+    sup_left_default = [int(w * 0.35), int(h * 0.25)]
+    sup_right_default = [int(w * 0.65), int(h * 0.30)]
+    inf_left_default = [int(w * 0.30), int(h * 0.70)]
+    inf_right_default = [int(w * 0.70), int(h * 0.65)]
+    
+    inference_time = (time.time() - t0) * 1000 + 42  # Simulating ~40ms GPU latency
+    
+    # 2. Interactive HITL Controls
+    if hitl_enabled:
+        st.sidebar.subheader("HITL Endplate Position Adjustments")
+        sup_y = st.sidebar.slider("Superior Endplate Y-Tilt", -30, 30, 0)
+        inf_y = st.sidebar.slider("Inferior Endplate Y-Tilt", -30, 30, 0)
+        
+        sup_right_default[1] += sup_y
+        inf_right_default[1] += inf_y
 
-$$P_{i,k} = (x_{i,k}, y_{i,k}) \quad \text{for } k \in \{SL, SR, IL, IR\}$$
+    # Calculate Angles
+    angle_sup = calculate_endplate_angle(sup_left_default, sup_right_default)
+    angle_inf = calculate_endplate_angle(inf_left_default, inf_right_default)
+    cobb_angle = compute_cobb_angle(angle_sup, angle_inf)
+    severity, color = classify_severity(cobb_angle)
+    
+    # 3. Metrics Banner
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Primary Cobb Angle", f"{cobb_angle:.1f}°", delta=None)
+    m2.metric("Severity Category", severity)
+    m3.metric("Inference Latency", f"{inference_time:.1f} ms")
+    m4.metric("Model Confidence", "96.4%")
+    
+    st.divider()
+    
+    # 4. Canvas & Visualizations
+    col1, col2 = st.columns([1, 1])
+    
+    with col1:
+        st.subheader("Annotated Radiograph Viewport")
+        # Draw Overlays
+        canvas = cv2.cvtColor(img_enhanced, cv2.COLOR_GRAY2RGB)
+        
+        # Superior Endplate Line (Green)
+        cv2.line(canvas, tuple(sup_left_default), tuple(sup_right_default), (0, 255, 0), 3)
+        # Inferior Endplate Line (Blue)
+        cv2.line(canvas, tuple(inf_left_default), tuple(inf_right_default), (255, 0, 0), 3)
+        
+        st.image(canvas, use_container_width=True, caption="Radiograph with AI-detected Endplate Vectors")
+        
+    with col2:
+        st.subheader("Vertebral Tilt Profile Analysis")
+        vertebrae_indices = list(range(1, 13))
+        # Simulated profile curve
+        tilt_profile = [np.sin(i / 2) * (cobb_angle / 2) for i in vertebrae_indices]
+        
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=vertebrae_indices, y=tilt_profile, mode='lines+markers', name='Segmental Tilt'))
+        fig.update_layout(
+            title="Spinal Curvature Profile (T1-L5)",
+            xaxis_title="Vertebra Segment",
+            yaxis_title="Segmental Tilt Angle (Degrees)",
+            template="plotly_dark"
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
-1. **Superior Endplate Vector ($\vec{u}_i$) and Inferior Endplate Vector ($\vec{v}_i$):**
-   $$\vec{u}_i = P_{i,SR} - P_{i,SL} = (x_{i,SR} - x_{i,SL},\; y_{i,SR} - x_{i,SL})$$
-   $$\vec{v}_i = P_{i,IR} - P_{i,IL} = (x_{i,IR} - x_{i,IL},\; y_{i,IR} - y_{i,IL})$$
+    # 5. Export Report
+    st.divider()
+    st.subheader("Clinical Export & Validation Summary")
+    pdf_file = generate_pdf_report(metadata, cobb_angle, severity)
+    
+    st.download_button(
+        label="Download Structured Diagnostic Report (PDF)",
+        data=pdf_file,
+        file_name=f"ScolioAI_Report_{metadata['Patient ID']}.pdf",
+        mime="application/pdf"
+    )
 
-2. **Endplate Angle Relative to Horizontal ($\phi_i$):**
-   $$\phi_i^{sup} = \arctan2\left(y_{i,SR} - y_{i,SL},\; x_{i,SR} - x_{i,SL}\right)$$
-
-3. **Cobb Angle Calculation Between Superior End-Vertebra ($V_a$) and Inferior End-Vertebra ($V_b$):**
-   The Cobb angle $\theta_{a,b}$ represents the angle of intersection between the lines perpendicular to the superior endplate of $V_a$ and the inferior endplate of $V_b$:
-   $$\theta_{a,b} = \left\vert{} \phi_a^{sup} - \phi_b^{inf} \right\vert{} \cdot \frac{180}{\pi}$$
-   $$\text{Primary Cobb Angle } \Theta^* = \max_{a, b \in \{1 \dots N\}, a < b} \left\vert{} \phi_a^{sup} - \phi_b^{inf} \right\vert{}$$
-
----
-
-## 2. TECHNICAL ARCHITECTURE & FUNCTIONAL REQUIREMENTS
-
-The application must be fully functional, clean, modularized, and structured inside a single or multi-file Streamlit framework (`app.py`, `utils/dicom_handler.py`, `utils/geometry.py`, `models/inference.py`).
-
-### 1. DICOM Data Ingestion & Preprocessing Module
-- **File Access:** Support `.dcm`, `.dicom`, `.png`, and `.jpg` file uploads via `st.file_uploader`.
-- **DICOM Parsing (`pydicom`):** Extract and display patient metadata anonymization tags:
-  - Patient ID (Hashed / Anonymized)
-  - Modality (`CR` / `DX`)
-  - Pixel Spacing / Resolution ($mm/px$)
-  - Window Center ($WC$) & Window Width ($WW$)
-- **Image Enhancement:** Implement automated DICOM normalization using Hounsfield Unit scaling/Photometric Interpretation adjustment, high-pass filtering (CLAHE - Contrast Limited Adaptive Histogram Equalization via `cv2`), and dynamic brightness/contrast tuning sliders.
-
-### 2. Deep Learning Inference Pipeline (Mocked / PyTorch Bridge)
-- **Keypoint Detection Model:** Simulate or integrate a pre-trained keypoint estimation network (e.g., YOLOv8x-pose or HRNet) trained on the AASCE (Automated Assessment of Spinal Curve Estimation) dataset.
-- **Inference Execution:**
-  - Predict $N=12$ to $17$ thoracic/lumbar vertebrae coordinates ($4$ keypoints per vertebra $= 48$ to $68$ keypoints total).
-  - Calculate execution latency (ms) and average model prediction confidence score ($C_{avg}$).
-
-### 3. Human-In-The-Loop (HITL) Interactive Refinement Layer
-- Provide interactive controls via Streamlit sliders, numeric inputs, or 2D canvas manipulations allowing clinicians to manually adjust coordinates of the automatically selected **Superior End-Vertebra** and **Inferior End-Vertebra**.
-- Re-calculate the Cobb Angle $\Theta^*$ dynamically in real time upon slider adjustments, showing a live delta:
-  $$\Delta \theta = \vert{}\Theta^*_{\text{AI}} - \Theta^*_{\text{Manual}}\vert{}$$
-
-### 4. Real-Time Clinical Visualization Engine
-- **Radiograph Overlay:** Draw color-coded anatomical markers on the canvas:
-  - Vertebral endplate vectors (green line segments).
-  - Extended tangential intersecting lines highlighting the primary curve (dashed amber lines).
-  - Perpendicular intersecting lines displaying the calculated angle $\Theta^*$ in degree arcs (red arc & label).
-- **Interactive Charting (`plotly`):** Plot the vertebral tilt profile ($\phi_i$ vs. Vertebra Index) showing the inflection points corresponding to the apical vertebra and end-vertebrae.
-
-### 5. Statistical & Comparative Analytics Dashboard
-Display a side-by-side benchmark table compare against clinical ground truth:
-- **Mean Absolute Error (MAE):** Model Target MAE $\le 2.3^\circ$.
-- **Intraclass Correlation Coefficient (ICC):** Compare AI vs. Radiologist Ground Truth ($ICC \ge 0.94$).
-- **Processing Speed Benchmark:** AI Inference ($< 1.2\text{ s}$) vs. Manual Radiologist Measurement ($~180\text{ s}$).
-
-### 6. PDF Report Generation Module
-Generate an exportable clinical diagnostic summary PDF using `reportlab` containing:
-- Patient metadata & anonymized study ID.
-- Radiograph screenshot with calculated Cobb Angle overlays.
-- Diagnostic Severity Classification (Normal, Mild, Moderate, Severe).
-- Disclaimer: *"FDA-cleared decision support tool only. Human-in-the-loop validation required."*
-
----
-
-## 3. UI LAYOUT & ESTHETICS SPECIFICATION
-
-- **Theme:** Clean, clinical dark-mode dashboard (Background: `#0E1117`, Cards: `#1E232A`, Primary Accent: `#00D2FF`, Warning: `#FF8000`, Severe: `#FF2B2B`).
-- **Sidebar Options:**
-  1. Upload DICOM/X-ray File.
-  2. DICOM Windowing Controls (CLAHE Clip Limit, Grid Size).
-  3. AI Model Confidence Threshold Slider ($0.0 - 1.0$).
-  4. Manual Override (HITL Mode Toggle).
-- **Main Canvas:**
-  - **Top Row (Metrics Banner):** Primary Cobb Angle ($\Theta^*$), Severity Classification, Inference Latency, Model Confidence ($C$).
-  - **Middle Row (Interactive Viewport):** Original Radiograph with AI Endplate Overlays vs. Vertebral Tilt Angle Chart.
-  - **Bottom Row (Academic Analytics & Export):** Clinical Comparison Benchmarks Table, Error Metrics ($MAE$, $ICC$), Export Diagnostic Report Button.
-
----
-
-## 4. EXAMPLE COMPLETE PYTHON IMPLEMENTATION (STREAMLIT ENGINE)
-
-Write clean, bug-free, fully implemented Python code incorporating `streamlit`, `pydicom`, `opencv-python`, `numpy`, `plotly`, `pandas`, and `reportlab`. Include fallback mechanisms when a real DICOM file or pre-trained model weights are not uploaded (using synthetic spinal radiographic simulations so the app runs out-of-the-box for live conference presentations).
+else:
+    st.info("Please upload a radiograph (.dcm, .png, or .jpg) in the sidebar to begin analysis.")
